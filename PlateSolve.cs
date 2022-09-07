@@ -34,7 +34,7 @@ public class PlateSolve : IDisposable
         _astapCli = astapCli;
     }
 
-    public int Loop()
+    public async Task<int> LoopAsync()
     {
         _guider.Connect();
         var profileToConnect = FindPreferredProfile(ProfilesToTest);
@@ -65,11 +65,11 @@ public class PlateSolve : IDisposable
             var sw = Stopwatch.StartNew();
             if (filePrefix is not null)
             {
-                (lastRA, lastDec) = ProcessFile(filePrefix, lastRA, lastDec);
+                (lastRA, lastDec) = await ProcessFileAsync(filePrefix, lastRA, lastDec);
 
                 if (lastRA.HasValue && lastDec.HasValue)
                 {
-                    _sender.BroadcastAsJsonUtf8(new UpdateMessage(lastRA.Value, lastDec.Value));
+                    await _sender.BroadcastAsJsonUtf8Async(new UpdateMessage(lastRA.Value, lastDec.Value));
                 }
             }
             var processTime = sw.Elapsed;
@@ -78,7 +78,7 @@ public class PlateSolve : IDisposable
             // wait the difference (if positive)
             if (processTime < expTime)
             {
-                Thread.Sleep((expTime - processTime) + TimeSpan.FromMilliseconds(100.0));
+                await Task.Delay((expTime - processTime) + TimeSpan.FromMilliseconds(100.0));
             }
         }
 
@@ -105,7 +105,7 @@ public class PlateSolve : IDisposable
     static readonly Regex IniKVPattern = new Regex(@"^\s*(\w+)\s*=\s*([^#]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    (double? ra, double? dec) ProcessFile(string filePrefix, double? lastRA, double? lastDec)
+    async Task<(double? ra, double? dec)> ProcessFileAsync(string filePrefix, double? lastRA, double? lastDec)
     {
         double? newRA = null;
         double? newDec = null;
@@ -156,7 +156,7 @@ public class PlateSolve : IDisposable
             };
             proc.BeginErrorReadLine();
             proc.BeginOutputReadLine();
-            proc.WaitForExit();
+            await proc.WaitForExitAsync();
 
             foreach (var line in stdout)
             {
@@ -175,7 +175,7 @@ public class PlateSolve : IDisposable
         if (hasIni)
         {
             var kvs = new Dictionary<string, string>(
-                from line in File.ReadAllLines(iniFile)
+                from line in await File.ReadAllLinesAsync(iniFile)
                 where !string.IsNullOrWhiteSpace(line)
                 let match = IniKVPattern.Match(line)
                 where match.Success

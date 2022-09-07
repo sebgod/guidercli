@@ -18,7 +18,7 @@ class Program {
         }
     }
 
-    static int Main(string[] args)
+    static async Task<int> Main(string[] args)
     {
         if (args.Length == 0) {
             Console.Error.WriteLine("Need to provide arguments!");
@@ -38,7 +38,7 @@ class Program {
                 }
 
                 using (var plateSolve = new PlateSolve(host, instance, astapCli)) {
-                    return plateSolve.Loop();
+                    return await plateSolve.LoopAsync();
                 }
 
             default:

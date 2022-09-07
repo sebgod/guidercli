@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace PHD2;
 
 public interface IUdpSender : IDisposable {
-    void BroadcastAsJsonUtf8<T>(T msg);
+    ValueTask<int> BroadcastAsJsonUtf8Async<T>(T msg);
 }
 
 internal class UdpSender : UdpBase, IUdpSender {
@@ -13,5 +13,5 @@ internal class UdpSender : UdpBase, IUdpSender {
         // calls base
     }
 
-    public void BroadcastAsJsonUtf8<T>(T msg) => _client.Send(JsonSerializer.SerializeToUtf8Bytes(msg), Broadcast, Port);
+    public ValueTask<int> BroadcastAsJsonUtf8Async<T>(T msg) => _client.SendAsync(JsonSerializer.SerializeToUtf8Bytes(msg), Broadcast, Port);
 }
