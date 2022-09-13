@@ -8,11 +8,7 @@ class Program {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
                 return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "astap", "astap_cli.exe");
             } else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
-                return RuntimeInformation.ProcessArchitecture switch {
-                    Architecture.X86 or Architecture.X64 => Path.Combine("usr", "bin", "astap", "astap.exe"),
-                    Architecture.Arm or Architecture.Arm64 => Path.Combine("opt", "XXX"),
-                    _ => null
-                };
+                return "astap";
             }
             return null;
         }
