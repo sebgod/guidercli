@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.3.32922.545
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "guidercli", "guidercli.csproj", "{4306EFB2-6553-4FDC-B9CE-1B84F50924DE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4306EFB2-6553-4FDC-B9CE-1B84F50924DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4306EFB2-6553-4FDC-B9CE-1B84F50924DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4306EFB2-6553-4FDC-B9CE-1B84F50924DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4306EFB2-6553-4FDC-B9CE-1B84F50924DE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {36159678-7BF7-4567-9DD5-A58784D08C10}
+	EndGlobalSection
+EndGlobal

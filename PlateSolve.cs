@@ -3,40 +3,56 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using Astap.Lib.Astrometry.PlateSolve;
+using Astap.Lib.Devices.Guider;
 
 namespace PHD2;
 
 public class PlateSolve : IDisposable
-{    
+{
     const string MainProfile = "FinderScope";
     const string SimProfile = "Simulator";
 
-    static readonly string[] ProfilesToTest = new [] {
+    static readonly string[] ProfilesToTest = new[] {
         MainProfile,
         SimProfile
     };
 
-    private readonly IGuider _guider;
+    private readonly GuiderDevice _guiderDevice;
+    private IGuider _guider;
     private readonly IUdpSender _sender;
-    private readonly string _astapCli;
+    private readonly IPlateSolver _plateSolver;
     private bool disposedValue;
 
-    public PlateSolve(string host, uint instance, string astapCli)
-        : this(new GuiderImpl(host, instance), new UdpSender(), astapCli)
+    public PlateSolve(string host, uint instance)
+        : this(new GuiderDevice("PHD2", $"{host}/{instance}", ""))
     {
         // calls below
     }
 
-    public PlateSolve(IGuider guider, IUdpSender sender, string astapCli)
+    public PlateSolve(GuiderDevice guiderDevice)
+        : this(
+              guiderDevice,
+              guiderDevice.TryInstantiate(out IGuider? driver)
+                ? driver
+                : throw new ArgumentException($"Cannot find guider at {guiderDevice}", nameof(guiderDevice)),
+              new UdpSender(),
+              new AstrometryNetPlateSolver())
     {
+        // calls below
+    }
+
+    public PlateSolve(GuiderDevice device, IGuider guider, IUdpSender sender, IPlateSolver plateSolver)
+    {
+        _guiderDevice = device;
         _guider = guider;
         _sender = sender;
-        _astapCli = astapCli;
+        _plateSolver = plateSolver;
     }
 
     public async Task<int> LoopAsync()
     {
-        _guider.Connect();
+        _guider.Connected = true;
         var profileToConnect = FindPreferredProfile(ProfilesToTest);
 
         if (profileToConnect is null)
@@ -45,7 +61,18 @@ public class PlateSolve : IDisposable
             return -1;
         }
 
-        _guider.ConnectEquipment(profileToConnect);
+        if (new GuiderDevice(_guiderDevice.DeviceType, _guiderDevice.DeviceId, profileToConnect).TryInstantiate(out IGuider? guiderProfile))
+        {
+            _guider = guiderProfile;
+            _guider.Connected = true;
+            _guider.ConnectEquipment();
+        }
+        else
+        {
+            Console.Error.WriteLine("Cannot connect to {0}", profileToConnect);
+            return -1;
+        }
+
         _guider.UnhandledEvent += (sender, eventArgs) =>
         {
             Console.Error.WriteLine("Unhandled event: {0}: {1}", eventArgs.Event, eventArgs.Payload);
@@ -53,23 +80,46 @@ public class PlateSolve : IDisposable
 
         _guider.Loop();
 
-        double? lastRA = null;
-        double? lastDec = null;
+        (double ra, double dec)? lastSolution = null;
         var expTime = TimeSpan.FromSeconds(1.5);
-
-        while (_guider.IsConnected && _guider.IsLooping())
+        var cameraFrameSize = _guider.CameraFrameSize();
+        if (!cameraFrameSize.HasValue)
         {
+            Console.Error.WriteLine("Unable to get camera frame size");
+            return -1;
+        }
+        var imageDims = new ImageDim(_guider.PixelScale(), cameraFrameSize.Value.width, cameraFrameSize.Value.height);
+
+        while (_guider.Connected && _guider.IsLooping())
+        {
+            var cts = new CancellationTokenSource(expTime * (lastSolution.HasValue ? 2 : 10));
             var filePrefix = _guider.SaveImage();
-            Console.WriteLine("Saved image: {0}", filePrefix);
 
             var sw = Stopwatch.StartNew();
             if (filePrefix is not null)
             {
-                (lastRA, lastDec) = await ProcessFileAsync(filePrefix, lastRA, lastDec);
+                var fitsFile = Path.ChangeExtension(filePrefix, $".{Random.Shared.Next()}.fits");
+                File.Move(filePrefix, fitsFile);
+                Console.WriteLine("Saved image: {0}", fitsFile);
 
-                if (lastRA.HasValue && lastDec.HasValue)
+                try
                 {
-                    await _sender.BroadcastAsJsonUtf8Async(new UpdateMessage(lastRA.Value, lastDec.Value));
+                    lastSolution = await _plateSolver.SolveFileAsync(fitsFile, imageDims, 0.4f, searchRadius: 1, searchOrigin: lastSolution, cancellationToken: cts.Token);
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Error while solving {0}: {1}", fitsFile, e.Message);
+                    lastSolution = null;
+                    continue;
+                }
+                finally
+                {
+                    File.Delete(fitsFile);
+                }
+
+                if (lastSolution is (double ra, double dec))
+                {
+                    await _sender.BroadcastAsJsonUtf8Async(new UpdateMessage(ra, dec));
                 }
             }
             var processTime = sw.Elapsed;
@@ -85,7 +135,7 @@ public class PlateSolve : IDisposable
         return 0;
     }
 
-    
+
     string? FindPreferredProfile(params string[] profilesToTest)
     {
         var profiles = _guider.GetEquipmentProfiles();
@@ -100,111 +150,6 @@ public class PlateSolve : IDisposable
         }
 
         return profileToConnect;
-    }
-
-    static readonly Regex IniKVPattern = new Regex(@"^\s*(\w+)\s*=\s*([^#]+)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    async Task<(double? ra, double? dec)> ProcessFileAsync(string filePrefix, double? lastRA, double? lastDec)
-    {
-        double? newRA = null;
-        double? newDec = null;
-        string fitsFile = filePrefix + ".fits";
-        string iniFile = filePrefix + ".ini";
-        string wcsFile = filePrefix + ".wcs";
-        File.Move(filePrefix, fitsFile);
-
-        var argsBuilder = new StringBuilder()
-            .AppendFormat("-f \"{0}\"", fitsFile);
-        
-        if (lastRA.HasValue && lastDec.HasValue) {
-            argsBuilder
-                .AppendFormat(" -ra {0:0.0}", Math.Clamp(lastRA.Value / 15.0, 0, 24))
-                .AppendFormat(" -spd {0:0.0}", Math.Clamp(lastDec.Value + 90.0, 0.0, 180.0))
-                .AppendFormat(" -r {0}", 5);
-        }
-
-        var args = argsBuilder.ToString();
-        Console.WriteLine("Run {0} {1} last RA={2:0.000} DEC={3:0.000}", _astapCli, args, lastRA, lastDec);
-
-        var info = new ProcessStartInfo(_astapCli, args)
-        {
-            CreateNoWindow = false,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        var proc = Process.Start(info);
-        var stdout = new ConcurrentQueue<string>();
-        var stderr = new ConcurrentQueue<string>();
-        if (proc is not null)
-        {
-            proc.OutputDataReceived += (sender, eventArgs) =>
-            {
-                if (eventArgs.Data is string data)
-                {
-                    stdout.Append(data);
-                }
-            };
-            proc.ErrorDataReceived += (sender, eventArgs) =>
-            {
-                if (eventArgs.Data is string data)
-                {
-                    stderr.Append(data);
-                }
-            };
-            proc.BeginErrorReadLine();
-            proc.BeginOutputReadLine();
-            await proc.WaitForExitAsync();
-
-            foreach (var line in stdout)
-            {
-                Console.WriteLine(line);
-            }
-            foreach (var line in stderr)
-            {
-                Console.Error.WriteLine(line);
-            }
-        }
-
-        File.Delete(fitsFile);
-        var hasIni = File.Exists(iniFile);
-        var hasWcs = File.Exists(wcsFile);
-
-        if (hasIni)
-        {
-            var kvs = new Dictionary<string, string>(
-                from line in await File.ReadAllLinesAsync(iniFile)
-                where !string.IsNullOrWhiteSpace(line)
-                let match = IniKVPattern.Match(line)
-                where match.Success
-                let key = match.Groups[1].Value
-                let value = match.Groups[2].Value.Trim()
-                select KeyValuePair.Create(key, value)
-            );
-
-            if (kvs.TryGetValue("PLTSOLVD", out var isPlateSolved) && isPlateSolved == "T") {
-                newRA = ParseDouble(kvs, "CRVAL1");
-                newDec = ParseDouble(kvs, "CRVAL2");
-            }
-    
-            File.Delete(iniFile);
-        }
-        if (hasWcs)
-        {
-            File.Delete(wcsFile);
-        }
-
-        return (newRA, newDec);
-    }
-
-    static double? ParseDouble(Dictionary<string, string> dict, string key) {
-        if (dict.TryGetValue(key, out var value) && double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var @float)) {
-            return @float;
-        } else {
-            return null;
-        }
     }
 
     protected virtual void Dispose(bool disposing)
